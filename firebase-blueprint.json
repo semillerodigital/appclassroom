@@ -1,0 +1,83 @@
+{
+  "entities": {
+    "ClassDay": {
+      "title": "Día de Clase",
+      "description": "Día programado para clases y toma de asistencia",
+      "type": "object",
+      "properties": {
+        "date": { "type": "string", "format": "date" },
+        "description": { "type": "string" },
+        "createdBy": { "type": "string" }
+      },
+      "required": ["date"]
+    },
+    "AttendanceSession": {
+      "title": "Sesión de Asistencia",
+      "description": "Registro de asistencia para un curso en un día de clase específico",
+      "type": "object",
+      "properties": {
+        "courseId": { "type": "string" },
+        "classDayId": { "type": "string" },
+        "date": { "type": "string", "format": "date-time" },
+        "createdBy": { "type": "string" },
+        "records": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "studentId": { "type": "string" },
+              "studentName": { "type": "string" },
+              "studentEmail": { "type": "string" },
+              "present": { "type": "boolean" }
+            }
+          }
+        }
+      },
+      "required": ["courseId", "classDayId", "date", "records"]
+    },
+    "GroupConfig": {
+      "title": "Configuración de Grupos",
+      "description": "Asignación de alumnos y profesores a grupos para un curso",
+      "type": "object",
+      "properties": {
+        "count": { "type": "integer" },
+        "teachers": { 
+          "type": "object",
+          "description": "Email -> Numero de grupo"
+         },
+        "students": { 
+          "type": "object",
+          "description": "Email -> Numero de grupo"
+        }
+      },
+      "required": ["count", "teachers", "students"]
+    },
+    "Admin": {
+      "title": "Administrador",
+      "description": "Usuario con permisos de administrador",
+      "type": "object",
+      "properties": {
+        "email": { "type": "string" }
+      },
+      "required": ["email"]
+    }
+  },
+  "firestore": {
+    "/class_days": {
+      "schema": "ClassDay",
+      "description": "Días de clase definidos por administradores"
+    },
+    "/attendance": {
+      "schema": "AttendanceSession",
+      "description": "Registros de asistencia por curso y día"
+    },
+    "/groups": {
+      "schema": "GroupConfig",
+      "description": "Configuración de grupos por curso (ID del documento es el ID del curso)"
+    },
+    "/admins": {
+      "schema": "Admin",
+      "description": "Lista de correos de administradores (ID del documento es el correo)"
+    }
+  }
+}

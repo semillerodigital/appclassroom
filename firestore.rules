@@ -1,0 +1,79 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // 1. GLOBAL SAFETY NET: Default deny
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // 2. PRIMITIVE HELPERS
+    function isSignedIn() {
+      return request.auth != null;
+    }
+    
+    function isEmailVerified() {
+      return isSignedIn() && request.auth.token.email_verified == true;
+    }
+
+    function isAdmin() {
+      // Hardcoded list for bootstrapping + Firestore lookup
+      return isSignedIn() && (
+        request.auth.token.email == "admin@semillerodigital.org" ||
+        request.auth.token.email == "marinsekaxel@gmail.com" ||
+        exists(/databases/$(database)/documents/admins/$(request.auth.token.email))
+      );
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    // 3. VALIDATION BLUEPRINTS
+    function isValidClassDay(data) {
+      return data.keys().hasAll(['date']) && 
+             data.date is string && data.date.size() <= 20 &&
+             (!('description' in data) || (data.description is string && data.description.size() <= 500));
+    }
+
+    function isValidAttendanceSession(data) {
+      return data.keys().hasAll(['courseId', 'classDayId', 'date', 'records']) &&
+             data.courseId is string && data.classDayId is string &&
+             data.records is list && data.records.size() <= 200;
+    }
+
+    function isValidGroupConfig(data) {
+      return data.keys().hasAll(['count', 'teachers', 'students']) &&
+             data.count is int && data.teachers is map && data.students is map;
+    }
+
+    // 4. COLLECTION RULES
+    
+    match /admins/{email} {
+      allow read: if isSignedIn();
+      allow write: if isAdmin();
+    }
+
+    match /class_days/{dayId} {
+      allow read: if isSignedIn();
+      allow create, update: if isAdmin() && isValidClassDay(incoming());
+      allow delete: if isAdmin();
+    }
+
+    match /groups/{courseId} {
+      allow read: if isSignedIn();
+      allow write: if (isAdmin() || 
+                    (isSignedIn() && (request.auth.token.email == "admin@semillerodigital.org" || request.auth.token.email == "marinsekaxel@gmail.com")))
+                    && isValidGroupConfig(incoming());
+    }
+
+    match /attendance/{sessionId} {
+      allow read: if isSignedIn();
+      allow create, update: if isSignedIn() && isValidAttendanceSession(incoming());
+      allow delete: if isAdmin();
+    }
+  }
+}

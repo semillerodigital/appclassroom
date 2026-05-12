@@ -1,0 +1,35 @@
+@import url('https://fonts.googleapis.com/css2?family=Montserrat:wght@300;400;500;600;700&display=swap');
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Montserrat", ui-sans-serif, system-ui, sans-serif;
+  
+  --color-semillero-primary: #5926a9;
+  --color-semillero-dark: #1a1a1a;
+  --color-semillero-light: #fdfcf8;
+  --color-semillero-accent: #f5f2ed;
+}
+
+body {
+  @apply bg-semillero-light text-semillero-dark font-sans;
+}
+
+.btn-primary {
+  @apply bg-semillero-primary text-white px-6 py-2 rounded-[40px] hover:opacity-90 transition-all font-semibold flex items-center gap-2;
+}
+
+.btn-secondary {
+  @apply bg-white border border-gray-200 text-semillero-dark px-6 py-2 rounded-[40px] hover:bg-gray-50 transition-all font-semibold flex items-center gap-2;
+}
+
+.card {
+  @apply bg-white rounded-[32px] shadow-sm border border-gray-100 p-6 hover:shadow-md transition-all;
+}
+
+.modal-overlay {
+  @apply fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4;
+}
+
+.modal-content {
+  @apply bg-white rounded-[40px] w-full max-w-4xl max-h-[90vh] overflow-hidden flex flex-col shadow-2xl;
+}

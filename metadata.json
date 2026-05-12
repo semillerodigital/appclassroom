@@ -1,0 +1,9 @@
+{
+  "name": "Gestión de cursos",
+  "description": "Visualizador de Google Classroom con gestión de grupos, reportes PDF y módulo de asistencia para Semillero Digital.",
+  "requestFramePermissions": [
+    "camera",
+    "microphone",
+    "geolocation"
+  ]
+}
