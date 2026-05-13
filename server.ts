@@ -41,7 +41,7 @@ function getDb() {
 // getDb();
 
 const app = express();
-const PORT = 3000;
+const PORT = process.env.PORT ? parseInt(process.env.PORT) : 3000;
 
 // Health check
 app.get('/api/health', (req, res) => {
@@ -91,7 +91,8 @@ const getRedirectUri = (req?: any) => {
   }
 
   // Fallback para desarrollo local
-  return 'http://localhost:3000/auth/callback';
+  const port = process.env.PORT || 3000;
+  return `http://localhost:${port}/auth/callback`;
 };
 
 const getOAuth2Client = (tokens?: any, req?: any) => {

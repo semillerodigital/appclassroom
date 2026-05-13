@@ -16,8 +16,8 @@ COPY . .
 # Build the application (Vite frontend + Bundled Express server)
 RUN npm run build
 
-# Expose the port the app runs on
-EXPOSE 3000
+# Expose the port (Cloud Run will override this with its own PORT env var)
+EXPOSE 8080
 
 # Set production environment
 ENV NODE_ENV=production
