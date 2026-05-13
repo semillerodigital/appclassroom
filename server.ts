@@ -73,13 +73,14 @@ const getRedirectUri = (req?: any) => {
   // Prioridad 1: Detectar dinámicamente desde los headers (ESENCIAL para dominios personalizados)
   if (req) {
     const host = req.headers['x-forwarded-host'] || req.headers.host;
-    const protocol = req.headers['x-forwarded-proto'] || (host && host.includes('localhost') ? 'http' : 'https');
     
     if (host) {
       // Forzar HTTPS en producción (Cloud Run/Dominios personalizados)
       // Solo usar HTTP si es localhost
-      const protocol = host.includes('localhost') ? 'http' : 'https';
+      const isLocal = host.includes('localhost') || host.includes('127.0.0.1');
+      const protocol = isLocal ? 'http' : 'https';
       const uri = `${protocol}://${host}/auth/callback`;
+      console.log(`[AUTH] Calculated Redirect URI: ${uri} (Host: ${host}, Local: ${isLocal})`);
       return uri;
     }
   }
@@ -139,18 +140,28 @@ async function ensureAdminsExist() {
 
 // Classroom Routes
 app.get('/api/auth/url', (req, res) => {
-  if (!process.env.GOOGLE_CLIENT_ID || !process.env.GOOGLE_CLIENT_SECRET) {
-    console.error('CRITICAL: GOOGLE_CLIENT_ID or GOOGLE_CLIENT_SECRET is missing.');
-    return res.status(500).json({ error: 'Faltan las credenciales de Google (Client ID o Secret). Configúralas en el panel de Secrets de AI Studio.' });
+  try {
+    if (!process.env.GOOGLE_CLIENT_ID || !process.env.GOOGLE_CLIENT_SECRET) {
+      const error = 'Faltan GOOGLE_CLIENT_ID o GOOGLE_CLIENT_SECRET en las variables de entorno.';
+      console.error(`[AUTH] ${error}`);
+      return res.status(500).json({ error: 'Configuración incompleta: Faltan las credenciales de Google.' });
+    }
+
+    const currentRedirectUri = getRedirectUri(req);
+    const client = getOAuth2Client(undefined, req);
+    
+    const url = client.generateAuthUrl({
+      access_type: 'offline',
+      scope: SCOPES,
+      prompt: 'select_account consent'
+    });
+
+    console.log(`[AUTH] Generated Auth URL leading to: ${currentRedirectUri}`);
+    res.json({ url });
+  } catch (err: any) {
+    console.error('[AUTH] Failed to generate auth URL:', err);
+    res.status(500).json({ error: 'Error interno al generar la URL de autenticación', details: err.message });
   }
-  const client = getOAuth2Client(undefined, req);
-  const currentRedirectUri = getRedirectUri(req);
-  const url = client.generateAuthUrl({
-    access_type: 'offline',
-    scope: SCOPES,
-    prompt: 'select_account consent'
-  });
-  res.json({ url });
 });
 
 app.get('/auth/callback', async (req: any, res) => {
