@@ -547,13 +547,14 @@ app.get('/api/groups/:courseId', async (req, res) => {
 
 app.post('/api/groups/:courseId', async (req, res) => {
   const { courseId } = req.params;
-  const { count, teachers, students } = req.body;
+  const { count, names, teachers, students } = req.body;
   const db = getDb();
   try {
     if (!db) return res.status(500).json({ error: 'Base de datos no disponible' });
     
     const data = {
       count: count || 1,
+      names: names || {},
       teachers: teachers || {},
       students: students || {},
       updatedAt: FieldValue.serverTimestamp()

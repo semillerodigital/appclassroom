@@ -31,7 +31,7 @@ import {
   Cell
 } from 'recharts';
 import { jsPDF } from 'jspdf';
-import html2canvas from 'html2canvas';
+import autoTable from 'jspdf-autotable';
 import { 
   collection, 
   addDoc, 
@@ -254,10 +254,19 @@ export default function App() {
   const [showGroupModal, setShowGroupModal] = useState(false);
   const [showReportModal, setShowReportModal] = useState(false);
   const [showIndividualReport, setShowIndividualReport] = useState<Student | null>(null);
+  const [isExportingPdf, setIsExportingPdf] = useState(false);
 
   // Admin & Groups State
   const [admins, setAdmins] = useState<string[]>([]);
-  const [groupConfig, setGroupConfig] = useState<{ count: number, teachers: any, students: any }>({ count: 1, teachers: {}, students: {} });
+  const [groupConfig, setGroupConfig] = useState<{ count: number; names?: Record<string | number, string>; teachers: any; students: any }>({ count: 1, names: {}, teachers: {}, students: {} });
+
+  const getGroupName = (groupId: number | null) => {
+    if (!groupId) return '';
+    if (groupConfig?.names && groupConfig.names[groupId]) {
+      return groupConfig.names[groupId];
+    }
+    return `Grupo ${groupId}`;
+  };
 
   // Attendance State
   const [classDays, setClassDays] = useState<ClassDay[]>([]);
@@ -689,17 +698,227 @@ export default function App() {
     }
   };
 
-  const downloadPDF = async (elementId: string, filename: string) => {
-    const element = document.getElementById(elementId);
-    if (!element) return;
-    const canvas = await html2canvas(element, { scale: 2 });
-    const imgData = canvas.toDataURL('image/png');
-    const pdf = new jsPDF('p', 'mm', 'a4');
-    const imgProps = pdf.getImageProperties(imgData);
-    const pdfWidth = pdf.internal.pageSize.getWidth();
-    const pdfHeight = (imgProps.height * pdfWidth) / imgProps.width;
-    pdf.addImage(imgData, 'PNG', 0, 0, pdfWidth, pdfHeight);
-    pdf.save(filename);
+  const exportGeneralReportCSV = () => {
+    try {
+      const courseName = selectedCourse?.name || 'Curso';
+      const today = new Date().toLocaleDateString('es-AR');
+
+      const cleanCell = (val: string) => `"${(val || '').replace(/"/g, '""')}"`;
+
+      const headers = [
+        'Alumno',
+        'Email',
+        'Grupo',
+        '% Entrega',
+        'Tareas Entregadas',
+        'Tareas Totales',
+        ...courseWork.map(tw => tw.title)
+      ];
+
+      const rows = students.map(s => {
+        const studentSubs = submissions.filter(sub => sub.userId === s.profile.id);
+        const deliveredCount = studentSubs.filter(sub => sub.state === 'TURNED_IN' || sub.state === 'RETURNED').length;
+        const percentage = courseWork.length > 0 ? Math.round((deliveredCount / courseWork.length) * 100) : 0;
+        const gName = s.groupId ? getGroupName(s.groupId) : '-';
+
+        const taskStatuses = courseWork.map(tw => {
+          const sub = submissions.find(sub => sub.userId === s.profile.id && sub.courseWorkId === tw.id);
+          if (sub?.state === 'RETURNED') return 'Calificado';
+          if (sub?.state === 'TURNED_IN') return 'Entregado';
+          return 'Pendiente';
+        });
+
+        return [
+          cleanCell(s.profile.name.fullName),
+          cleanCell(s.profile.emailAddress),
+          cleanCell(gName),
+          cleanCell(`${percentage}%`),
+          cleanCell(`${deliveredCount}`),
+          cleanCell(`${courseWork.length}`),
+          ...taskStatuses.map(st => cleanCell(st))
+        ];
+      });
+
+      const metaRows = [
+        [cleanCell('Reporte General de Curso')],
+        [cleanCell(`Curso: ${courseName}`)],
+        [cleanCell(`Fecha de emisión: ${today}`)],
+        []
+      ];
+
+      const csvLines = [
+        ...metaRows.map(r => r.join(',')),
+        headers.map(cleanCell).join(','),
+        ...rows.map(r => r.join(','))
+      ];
+
+      const csvString = '\uFEFF' + csvLines.join('\n');
+      const blob = new Blob([csvString], { type: 'text/csv;charset=utf-8;' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.setAttribute('download', `Reporte_General_${courseName.replace(/\s+/g, '_')}_${today.replace(/\//g, '-')}.csv`);
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+    } catch (err: any) {
+      console.error('Error al exportar CSV:', err);
+      setError(`Error al generar el CSV: ${err?.message || 'Error desconocido'}`);
+    }
+  };
+
+  const exportGeneralReportPDF = async () => {
+    setIsExportingPdf(true);
+    try {
+      const doc = new jsPDF('landscape', 'mm', 'a4');
+      const courseName = selectedCourse?.name || 'Curso';
+      const today = new Date().toLocaleDateString('es-AR');
+
+      // Título
+      doc.setFontSize(18);
+      doc.setTextColor(30, 41, 59);
+      doc.text('Semillero Digital - Reporte General del Curso', 14, 15);
+
+      doc.setFontSize(10);
+      doc.setTextColor(100, 116, 139);
+      doc.text(`Curso: ${courseName}`, 14, 22);
+      doc.text(`Fecha de emisión: ${today}`, 14, 27);
+
+      // Resumen general
+      autoTable(doc, {
+        startY: 32,
+        head: [['Total Alumnos', 'Tareas Asignadas', 'Sesiones de Asistencia']],
+        body: [[`${students.length}`, `${courseWork.length}`, `${attendanceSessions.length}`]],
+        theme: 'grid',
+        headStyles: { fillColor: [45, 106, 79], textColor: [255, 255, 255], fontStyle: 'bold', halign: 'center' },
+        bodyStyles: { fontSize: 11, halign: 'center', fontStyle: 'bold' }
+      });
+
+      // Matriz de Cumplimiento
+      const tableHeaders = ['Alumno', ...courseWork.map(tw => tw.title), '% Entrega'];
+      const tableData = students.map(s => {
+        const studentSubs = submissions.filter(sub => sub.userId === s.profile.id);
+        const deliveredCount = studentSubs.filter(sub => sub.state === 'TURNED_IN' || sub.state === 'RETURNED').length;
+        const percentage = courseWork.length > 0 ? Math.round((deliveredCount / courseWork.length) * 100) : 0;
+
+        const taskStatuses = courseWork.map(tw => {
+          const sub = submissions.find(sub => sub.userId === s.profile.id && sub.courseWorkId === tw.id);
+          if (sub?.state === 'RETURNED') return 'Calificado';
+          if (sub?.state === 'TURNED_IN') return 'Entregado';
+          return 'Pendiente';
+        });
+
+        return [s.profile.name.fullName, ...taskStatuses, `${percentage}%`];
+      });
+
+      const lastY = (doc as any).lastAutoTable?.finalY || 55;
+
+      doc.setFontSize(12);
+      doc.setTextColor(30, 41, 59);
+      doc.text('Matriz de Cumplimiento de Tareas', 14, lastY + 10);
+
+      autoTable(doc, {
+        startY: lastY + 14,
+        head: [tableHeaders],
+        body: tableData,
+        theme: 'striped',
+        headStyles: { fillColor: [45, 106, 79], textColor: [255, 255, 255], fontSize: 8, fontStyle: 'bold' },
+        bodyStyles: { fontSize: 8 },
+        didParseCell: (data) => {
+          if (data.section === 'body' && data.column.index > 0 && data.column.index <= courseWork.length) {
+            if (data.cell.raw === 'Entregado' || data.cell.raw === 'Calificado') {
+              data.cell.styles.textColor = [22, 101, 52];
+              data.cell.styles.fontStyle = 'bold';
+            } else if (data.cell.raw === 'Pendiente') {
+              data.cell.styles.textColor = [194, 65, 12];
+            }
+          }
+        }
+      });
+
+      doc.save(`Reporte_General_${courseName.replace(/\s+/g, '_')}.pdf`);
+    } catch (err: any) {
+      console.error('Error al exportar PDF general:', err);
+      setError(`Error al generar el PDF: ${err?.message || 'Error desconocido'}`);
+    } finally {
+      setIsExportingPdf(false);
+    }
+  };
+
+  const exportIndividualReportPDF = async (student: Student) => {
+    setIsExportingPdf(true);
+    try {
+      const doc = new jsPDF('portrait', 'mm', 'a4');
+      const studentName = student.profile.name.fullName;
+      const courseName = selectedCourse?.name || 'Curso';
+      const today = new Date().toLocaleDateString('es-AR');
+
+      // Título y Datos Alumno
+      doc.setFontSize(18);
+      doc.setTextColor(30, 41, 59);
+      doc.text('Semillero Digital - Reporte de Alumno', 14, 15);
+
+      doc.setFontSize(11);
+      doc.setTextColor(15, 23, 42);
+      doc.text(`Alumno: ${studentName}`, 14, 23);
+
+      doc.setFontSize(10);
+      doc.setTextColor(100, 116, 139);
+      doc.text(`Email: ${student.profile.emailAddress}`, 14, 28);
+      doc.text(`Curso: ${courseName}`, 14, 33);
+      doc.text(`Fecha de emisión: ${today}`, 14, 38);
+
+      // Tabla Desempeño Tareas
+      const taskRows = courseWork.map(tw => {
+        const status = getSubmissionStatus(student.profile.id, tw.id);
+        return [tw.title, status.label];
+      });
+
+      doc.setFontSize(12);
+      doc.setTextColor(30, 41, 59);
+      doc.text('Desempeño en Tareas', 14, 48);
+
+      autoTable(doc, {
+        startY: 52,
+        head: [['Tarea', 'Estado de Entrega']],
+        body: taskRows.length > 0 ? taskRows : [['-', 'No hay tareas asignadas']],
+        theme: 'striped',
+        headStyles: { fillColor: [45, 106, 79], textColor: [255, 255, 255], fontStyle: 'bold' },
+        bodyStyles: { fontSize: 9 }
+      });
+
+      const lastY = (doc as any).lastAutoTable?.finalY || 90;
+
+      // Tabla Asistencia
+      const attendanceForCourse = attendanceSessions.filter(s => s.courseId === (selectedCourse?.id || ''));
+      const attendanceRows = attendanceForCourse.map(session => {
+        const day = classDays.find(d => d.id === session.classDayId);
+        const record = session.records.find(r => r.studentEmail === student.profile.emailAddress);
+        const dateStr = day ? new Date(day.date + 'T12:00:00').toLocaleDateString('es-AR') : 'Fecha desconocida';
+        const statusStr = record?.present ? 'Presente' : 'Ausente';
+        return [dateStr, statusStr];
+      });
+
+      doc.setFontSize(12);
+      doc.setTextColor(30, 41, 59);
+      doc.text('Registro de Asistencia', 14, lastY + 12);
+
+      autoTable(doc, {
+        startY: lastY + 16,
+        head: [['Fecha de Clase', 'Asistencia']],
+        body: attendanceRows.length > 0 ? attendanceRows : [['-', 'No hay registros de asistencia']],
+        theme: 'striped',
+        headStyles: { fillColor: [45, 106, 79], textColor: [255, 255, 255], fontStyle: 'bold' },
+        bodyStyles: { fontSize: 9 }
+      });
+
+      doc.save(`Reporte_${studentName.replace(/\s+/g, '_')}.pdf`);
+    } catch (err: any) {
+      console.error('Error al exportar PDF individual:', err);
+      setError(`Error al generar el PDF: ${err?.message || 'Error desconocido'}`);
+    } finally {
+      setIsExportingPdf(false);
+    }
   };
 
   if (!tokens) {
@@ -832,7 +1051,7 @@ export default function App() {
                               {course.courseState}
                             </div>
                           </div>
-                          {course.userGroupId && <div className="bg-semillero-primary text-white text-[10px] font-bold px-2 py-0.5 rounded-lg">G{course.userGroupId}</div>}
+                          {course.userGroupId && <div className="bg-semillero-primary text-white text-[10px] font-bold px-2 py-0.5 rounded-lg">{getGroupName(course.userGroupId)}</div>}
                         </div>
                         <h3 className="text-xl font-bold text-semillero-dark group-hover:text-semillero-primary transition-colors mb-1">{course.name}</h3>
                         <p className="text-sm text-gray-400">{course.section || 'Sin sección'}</p>
@@ -928,7 +1147,7 @@ export default function App() {
                                               <div><p className="text-sm font-bold text-semillero-dark">{student.profile.name.fullName}</p><p className="text-[10px] text-gray-400">{student.profile.emailAddress}</p></div>
                                             </div>
                                           </td>
-                                          <td className="py-4"><span className="text-xs text-gray-500">{student.groupId ? `Grupo ${student.groupId}` : '-'}</span></td>
+                                          <td className="py-4"><span className="text-xs text-gray-500">{student.groupId ? getGroupName(student.groupId) : '-'}</span></td>
                                           <td className="py-4"><div className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-[10px] font-bold ${status.color}`}><status.icon className="w-3 h-3" />{status.label}</div></td>
                                           <td className="py-4"><span className="text-[10px] text-gray-400">{status.date ? new Date(status.date).toLocaleString() : '-'}</span></td>
                                           <td className="py-4 text-right">
@@ -979,6 +1198,7 @@ export default function App() {
                   <thead>
                     <tr className="text-[10px] font-bold text-gray-400 uppercase tracking-widest border-b border-gray-100">
                       <th className="pb-4">Alumno</th>
+                      <th className="pb-4">Grupo</th>
                       <th className="pb-4">ID</th>
                       <th className="pb-4">Email</th>
                       <th className="pb-4 text-right">Reporte</th>
@@ -988,6 +1208,7 @@ export default function App() {
                     {visibleStudents.map(s => (
                       <tr key={s.profile.id}>
                         <td className="py-4 font-bold text-sm">{s.profile.name.fullName}</td>
+                        <td className="py-4 text-xs text-gray-500 font-medium">{s.groupId ? getGroupName(s.groupId) : '-'}</td>
                         <td className="py-4 font-mono text-xs text-gray-500">{s.profile.id}</td>
                         <td className="py-4 text-sm text-gray-600">{s.profile.emailAddress}</td>
                         <td className="py-4 text-right"><button onClick={() => setShowIndividualReport(s)} className="btn-primary py-1 px-3 text-xs"><BarChart2 className="w-3 h-3" /> Reporte</button></td>
@@ -1020,7 +1241,7 @@ export default function App() {
                           <p className="text-xs text-gray-500">{t.profile.emailAddress}</p>
                         </div>
                       </div>
-                      {t.groupId && <span className="bg-semillero-primary/10 text-semillero-primary text-xs font-bold px-3 py-1 rounded-full">Grupo {t.groupId}</span>}
+                      {t.groupId && <span className="bg-semillero-primary/10 text-semillero-primary text-xs font-bold px-3 py-1 rounded-full">{getGroupName(t.groupId)}</span>}
                     </div>
                   ))}
                 </div>
@@ -1035,21 +1256,51 @@ export default function App() {
               <div className="p-8 border-b border-gray-100 flex items-center justify-between">
                 <div>
                   <h2 className="text-2xl font-bold text-semillero-dark">Gestionar Grupos</h2>
-                  <p className="text-sm text-gray-500">Asigna profesores y alumnos a grupos específicos.</p>
+                  <p className="text-sm text-gray-500">Asigna profesores y alumnos a grupos específicos y personaliza sus nombres.</p>
                 </div>
                 <button onClick={() => setShowGroupModal(false)} className="p-2 hover:bg-gray-100 rounded-full"><X className="w-6 h-6" /></button>
               </div>
               <div className="p-8 space-y-8 max-h-[70vh] overflow-y-auto">
-                <div className="flex items-center gap-4 p-4 bg-semillero-primary/5 rounded-2xl border border-semillero-primary/10">
-                  <span className="text-sm font-bold text-semillero-dark">Cantidad de Grupos:</span>
-                  <input 
-                    type="number" 
-                    min="1" 
-                    max="10" 
-                    value={groupConfig.count} 
-                    onChange={(e) => saveGroups({ ...groupConfig, count: parseInt(e.target.value) || 1 })}
-                    className="w-20 px-3 py-1 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-semillero-primary/20"
-                  />
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 p-4 bg-semillero-primary/5 rounded-2xl border border-semillero-primary/10">
+                  <div className="flex items-center gap-3">
+                    <span className="text-sm font-bold text-semillero-dark">Cantidad de Grupos:</span>
+                    <input 
+                      type="number" 
+                      min="1" 
+                      max="10" 
+                      value={groupConfig.count} 
+                      onChange={(e) => saveGroups({ ...groupConfig, count: parseInt(e.target.value) || 1 })}
+                      className="w-20 px-3 py-1 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-semillero-primary/20 bg-white"
+                    />
+                  </div>
+                </div>
+
+                {/* Personalización de Nombres de Grupos */}
+                <div className="p-5 bg-gray-50 rounded-2xl border border-gray-100 space-y-3">
+                  <h4 className="text-xs font-bold text-semillero-dark uppercase tracking-wider flex items-center gap-2">
+                    <Settings className="w-4 h-4 text-semillero-primary" /> Nombres Personalizados de Grupos
+                  </h4>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
+                    {Array.from({ length: groupConfig.count }).map((_, i) => {
+                      const gId = i + 1;
+                      const customVal = groupConfig.names?.[gId] || '';
+                      return (
+                        <div key={gId} className="flex items-center gap-2">
+                          <span className="text-xs font-bold text-gray-500 min-w-[55px]">Grupo {gId}:</span>
+                          <input
+                            type="text"
+                            placeholder={`Ej: Comisión ${gId}`}
+                            value={customVal}
+                            onChange={(e) => {
+                              const newNames = { ...(groupConfig.names || {}), [gId]: e.target.value };
+                              saveGroups({ ...groupConfig, names: newNames });
+                            }}
+                            className="flex-1 px-3 py-1.5 bg-white border border-gray-200 rounded-xl text-xs focus:outline-none focus:ring-2 focus:ring-semillero-primary/20"
+                          />
+                        </div>
+                      );
+                    })}
+                  </div>
                 </div>
 
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
@@ -1058,19 +1309,25 @@ export default function App() {
                     <div className="space-y-2">
                       {teachers.map(t => (
                         <div key={t.profile.id} className="flex items-center justify-between p-3 bg-white border border-gray-100 rounded-xl">
-                          <span className="text-sm font-medium">{t.profile.name.fullName}</span>
+                          <span className="text-sm font-medium truncate max-w-[180px]">{t.profile.name.fullName}</span>
                           <select 
                             value={groupConfig.teachers[t.profile.emailAddress] || ''} 
                             onChange={(e) => {
                               const newTeachers = { ...groupConfig.teachers, [t.profile.emailAddress]: e.target.value ? parseInt(e.target.value) : null };
                               saveGroups({ ...groupConfig, teachers: newTeachers });
                             }}
-                            className="text-xs border border-gray-200 rounded px-2 py-1"
+                            className="text-xs border border-gray-200 rounded px-2 py-1 max-w-[180px]"
                           >
                             <option value="">Sin Grupo</option>
-                            {Array.from({ length: groupConfig.count }).map((_, i) => (
-                              <option key={i+1} value={i+1}>Grupo {i+1}</option>
-                            ))}
+                            {Array.from({ length: groupConfig.count }).map((_, i) => {
+                              const gId = i + 1;
+                              const cName = groupConfig.names?.[gId];
+                              return (
+                                <option key={gId} value={gId}>
+                                  {cName ? `${cName} (G${gId})` : `Grupo ${gId}`}
+                                </option>
+                              );
+                            })}
                           </select>
                         </div>
                       ))}
@@ -1081,19 +1338,25 @@ export default function App() {
                     <div className="space-y-2">
                       {students.map(s => (
                         <div key={s.profile.id} className="flex items-center justify-between p-3 bg-white border border-gray-100 rounded-xl">
-                          <span className="text-sm font-medium">{s.profile.name.fullName}</span>
+                          <span className="text-sm font-medium truncate max-w-[180px]">{s.profile.name.fullName}</span>
                           <select 
                             value={groupConfig.students[s.profile.emailAddress] || ''} 
                             onChange={(e) => {
                               const newStudents = { ...groupConfig.students, [s.profile.emailAddress]: e.target.value ? parseInt(e.target.value) : null };
                               saveGroups({ ...groupConfig, students: newStudents });
                             }}
-                            className="text-xs border border-gray-200 rounded px-2 py-1"
+                            className="text-xs border border-gray-200 rounded px-2 py-1 max-w-[180px]"
                           >
                             <option value="">Sin Grupo</option>
-                            {Array.from({ length: groupConfig.count }).map((_, i) => (
-                              <option key={i+1} value={i+1}>Grupo {i+1}</option>
-                            ))}
+                            {Array.from({ length: groupConfig.count }).map((_, i) => {
+                              const gId = i + 1;
+                              const cName = groupConfig.names?.[gId];
+                              return (
+                                <option key={gId} value={gId}>
+                                  {cName ? `${cName} (G${gId})` : `Grupo ${gId}`}
+                                </option>
+                              );
+                            })}
                           </select>
                         </div>
                       ))}
@@ -1114,7 +1377,30 @@ export default function App() {
                   <p className="text-sm text-gray-500">Visualización del progreso y asistencia de todos los alumnos.</p>
                 </div>
                 <div className="flex items-center gap-3">
-                  <button onClick={() => downloadPDF('general-report', `Reporte_${selectedCourse?.name}.pdf`)} className="btn-secondary"><Download className="w-4 h-4" /> Exportar PDF</button>
+                  <button 
+                    onClick={exportGeneralReportCSV} 
+                    className="btn-secondary flex items-center gap-2 bg-emerald-50 text-emerald-700 border-emerald-200 hover:bg-emerald-100 transition-colors"
+                  >
+                    <Download className="w-4 h-4 text-emerald-600" />
+                    <span>Exportar CSV</span>
+                  </button>
+                  <button 
+                    onClick={exportGeneralReportPDF} 
+                    disabled={isExportingPdf}
+                    className="btn-secondary flex items-center gap-2 disabled:opacity-50"
+                  >
+                    {isExportingPdf ? (
+                      <>
+                        <div className="w-4 h-4 border-2 border-semillero-primary/20 border-t-semillero-primary rounded-full animate-spin" />
+                        <span>Generando PDF...</span>
+                      </>
+                    ) : (
+                      <>
+                        <Download className="w-4 h-4" />
+                        <span>Exportar PDF</span>
+                      </>
+                    )}
+                  </button>
                   <button onClick={() => setShowReportModal(false)} className="p-2 hover:bg-gray-100 rounded-full"><X className="w-6 h-6" /></button>
                 </div>
               </div>
@@ -1241,7 +1527,23 @@ export default function App() {
                   </div>
                 </div>
                 <div className="flex items-center gap-3">
-                  <button onClick={() => downloadPDF(`report-${showIndividualReport.profile.id}`, `Reporte_${showIndividualReport.profile.name.fullName}.pdf`)} className="btn-secondary"><Download className="w-4 h-4" /> Exportar PDF</button>
+                  <button 
+                    onClick={() => exportIndividualReportPDF(showIndividualReport)} 
+                    disabled={isExportingPdf}
+                    className="btn-secondary flex items-center gap-2 disabled:opacity-50"
+                  >
+                    {isExportingPdf ? (
+                      <>
+                        <div className="w-4 h-4 border-2 border-semillero-primary/20 border-t-semillero-primary rounded-full animate-spin" />
+                        <span>Generando PDF...</span>
+                      </>
+                    ) : (
+                      <>
+                        <Download className="w-4 h-4" />
+                        <span>Exportar PDF</span>
+                      </>
+                    )}
+                  </button>
                   <button onClick={() => setShowIndividualReport(null)} className="p-2 hover:bg-gray-100 rounded-full"><X className="w-6 h-6" /></button>
                 </div>
               </div>
