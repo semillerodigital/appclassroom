@@ -4,6 +4,7 @@ import {
   Search, 
   ExternalLink, 
   Download, 
+  Upload,
   BarChart2, 
   Users, 
   ChevronDown, 
@@ -259,13 +260,16 @@ export default function App() {
   // Admin & Groups State
   const [admins, setAdmins] = useState<string[]>([]);
   const [groupConfig, setGroupConfig] = useState<{ count: number; names?: Record<string | number, string>; teachers: any; students: any }>({ count: 1, names: {}, teachers: {}, students: {} });
+  const [draftGroupConfig, setDraftGroupConfig] = useState<{ count: number; names?: Record<string | number, string>; teachers: any; students: any }>({ count: 1, names: {}, teachers: {}, students: {} });
+  const [isSavingGroups, setIsSavingGroups] = useState(false);
+  const [csvMessage, setCsvMessage] = useState<string | null>(null);
 
   const getGroupName = (groupId: number | null) => {
     if (!groupId) return '';
     if (groupConfig?.names && groupConfig.names[groupId]) {
       return groupConfig.names[groupId];
     }
-    return `Grupo ${groupId}`;
+    return `Célula ${groupId}`;
   };
 
   // Attendance State
@@ -698,6 +702,125 @@ export default function App() {
     }
   };
 
+  const exportStudentGroupsCSV = () => {
+    try {
+      const cleanCell = (val: string) => `"${(val || '').replace(/"/g, '""')}"`;
+      const headers = ['Email', 'Celula'];
+      
+      const rows = students.map(s => {
+        const email = s.profile.emailAddress;
+        const gId = draftGroupConfig.students?.[email] ?? s.groupId;
+        let gName = '';
+        if (gId) {
+          if (draftGroupConfig.names?.[gId]) {
+            gName = draftGroupConfig.names[gId];
+          } else {
+            gName = `Célula ${gId}`;
+          }
+        }
+        return [cleanCell(email), cleanCell(gName)];
+      });
+
+      const csvContent = '\uFEFF' + [headers.map(cleanCell).join(','), ...rows.map(r => r.join(','))].join('\n');
+      const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.setAttribute('download', `Asignaciones_Celulas_${(selectedCourse?.name || 'Curso').replace(/\s+/g, '_')}.csv`);
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+    } catch (err: any) {
+      console.error('Error al exportar CSV de células:', err);
+      setError(`Error al exportar células: ${err?.message || 'Error desconocido'}`);
+    }
+  };
+
+  const handleImportStudentGroupsCSV = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      try {
+        const text = event.target?.result as string;
+        if (!text) return;
+
+        const lines = text.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+        if (lines.length === 0) return;
+
+        const newStudents = { ...(draftGroupConfig.students || {}) };
+        let updatedCount = 0;
+
+        lines.forEach((line, index) => {
+          const parts = line.split(',').map(p => p.replace(/^"|"$/g, '').trim());
+          if (parts.length < 2) return;
+
+          const email = parts[0].toLowerCase();
+          const celulaVal = parts[1];
+
+          if (index === 0 && (email === 'email' || email === 'alumno')) return;
+          if (!email.includes('@')) return;
+
+          let assignedId: number | null = null;
+
+          if (celulaVal) {
+            if (draftGroupConfig.names) {
+              const matchedKey = Object.keys(draftGroupConfig.names).find(
+                k => draftGroupConfig.names?.[k]?.trim().toLowerCase() === celulaVal.toLowerCase()
+              );
+              if (matchedKey) {
+                assignedId = parseInt(matchedKey);
+              }
+            }
+
+            if (assignedId === null && !isNaN(Number(celulaVal)) && Number(celulaVal) > 0) {
+              assignedId = parseInt(celulaVal);
+            }
+
+            if (assignedId === null) {
+              const digitMatch = celulaVal.match(/\d+/);
+              if (digitMatch) {
+                assignedId = parseInt(digitMatch[0]);
+              }
+            }
+          }
+
+          const matchStudent = students.find(s => s.profile.emailAddress.toLowerCase() === email);
+          if (matchStudent) {
+            newStudents[matchStudent.profile.emailAddress] = assignedId;
+            updatedCount++;
+          }
+        });
+
+        setDraftGroupConfig(prev => ({ ...prev, students: newStudents }));
+        setCsvMessage(`Se actualizaron ${updatedCount} asignaciones en la vista previa. Haz clic en "Guardar Configuración" para confirmar.`);
+      } catch (err: any) {
+        console.error('Error al importar CSV:', err);
+        setError(`Error al procesar el archivo CSV: ${err.message || 'Formato no válido'}`);
+      } finally {
+        e.target.value = '';
+      }
+    };
+    reader.readAsText(file, 'UTF-8');
+  };
+
+  const handleSaveDraftGroups = async () => {
+    setIsSavingGroups(true);
+    try {
+      await saveGroups(draftGroupConfig);
+      setCsvMessage('¡Configuración de células guardada con éxito!');
+      setTimeout(() => {
+        setShowGroupModal(false);
+        setCsvMessage(null);
+      }, 1000);
+    } catch (err: any) {
+      console.error('Error saving groups:', err);
+    } finally {
+      setIsSavingGroups(false);
+    }
+  };
+
   const exportGeneralReportCSV = () => {
     try {
       const courseName = selectedCourse?.name || 'Curso';
@@ -708,7 +831,7 @@ export default function App() {
       const headers = [
         'Alumno',
         'Email',
-        'Grupo',
+        'Célula',
         '% Entrega',
         'Tareas Entregadas',
         'Tareas Totales',
@@ -1081,7 +1204,7 @@ export default function App() {
                         <>
                           <button onClick={() => setShowReportModal(true)} className="btn-secondary bg-blue-50 border-blue-100 text-blue-700"><BarChart2 className="w-4 h-4" /> Ver Reporte General</button>
                           <button onClick={() => setShowTeacherModal(true)} className="btn-secondary">Ver Profesores</button>
-                          <button onClick={() => setShowGroupModal(true)} className="btn-secondary">Gestionar Grupos</button>
+                          <button onClick={() => { setDraftGroupConfig(JSON.parse(JSON.stringify(groupConfig))); setCsvMessage(null); setShowGroupModal(true); }} className="btn-secondary">Gestionar Células</button>
                         </>
                       )}
                     </div>
@@ -1132,32 +1255,38 @@ export default function App() {
                                     <thead>
                                       <tr className="text-[10px] font-bold text-gray-400 uppercase tracking-widest border-b border-gray-100">
                                         <th className="pb-4">Alumno</th>
-                                        <th className="pb-4">Grupo</th>
+                                        <th className="pb-4">Célula</th>
                                         <th className="pb-4">Estado</th>
+                                        <th className="pb-4">Calificación</th>
                                         <th className="pb-4">Última Act.</th>
                                         <th className="pb-4 text-right">Acciones</th>
                                       </tr>
                                     </thead>
                                     <tbody className="divide-y divide-gray-50">
-                                      {taskSubmissions.map(({ student, status }) => (
-                                        <tr key={student.profile.id}>
-                                          <td className="py-4">
-                                            <div className="flex items-center gap-3">
-                                              <img src={student.profile.photoUrl} className="w-8 h-8 rounded-full" referrerPolicy="no-referrer" />
-                                              <div><p className="text-sm font-bold text-semillero-dark">{student.profile.name.fullName}</p><p className="text-[10px] text-gray-400">{student.profile.emailAddress}</p></div>
-                                            </div>
-                                          </td>
-                                          <td className="py-4"><span className="text-xs text-gray-500">{student.groupId ? getGroupName(student.groupId) : '-'}</span></td>
-                                          <td className="py-4"><div className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-[10px] font-bold ${status.color}`}><status.icon className="w-3 h-3" />{status.label}</div></td>
-                                          <td className="py-4"><span className="text-[10px] text-gray-400">{status.date ? new Date(status.date).toLocaleString() : '-'}</span></td>
-                                          <td className="py-4 text-right">
-                                            <div className="flex items-center justify-end gap-2">
-                                              {status.link && <a href={status.link} target="_blank" rel="noreferrer" className="p-2 text-gray-400 hover:text-semillero-primary"><ExternalLink className="w-4 h-4" /></a>}
-                                              <button onClick={() => setShowIndividualReport(student)} className="p-2 text-gray-400 hover:text-semillero-primary"><BarChart2 className="w-4 h-4" /></button>
-                                            </div>
-                                          </td>
-                                        </tr>
-                                      ))}
+                                      {taskSubmissions.map(({ student, status }) => {
+                                        const sub = submissions.find(s => s.userId === student.profile.id && s.courseWorkId === task.id);
+                                        const hasGrade = sub && typeof sub.assignedGrade === 'number';
+                                        return (
+                                          <tr key={student.profile.id}>
+                                            <td className="py-4">
+                                              <div className="flex items-center gap-3">
+                                                <img src={student.profile.photoUrl} className="w-8 h-8 rounded-full" referrerPolicy="no-referrer" />
+                                                <div><p className="text-sm font-bold text-semillero-dark">{student.profile.name.fullName}</p><p className="text-[10px] text-gray-400">{student.profile.emailAddress}</p></div>
+                                              </div>
+                                            </td>
+                                            <td className="py-4"><span className="text-xs text-gray-500">{student.groupId ? getGroupName(student.groupId) : '-'}</span></td>
+                                            <td className="py-4"><div className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-[10px] font-bold ${status.color}`}><status.icon className="w-3 h-3" />{status.label}</div></td>
+                                            <td className="py-4 font-bold text-xs text-semillero-dark">{hasGrade ? sub.assignedGrade : ''}</td>
+                                            <td className="py-4"><span className="text-[10px] text-gray-400">{status.date ? new Date(status.date).toLocaleString() : '-'}</span></td>
+                                            <td className="py-4 text-right">
+                                              <div className="flex items-center justify-end gap-2">
+                                                {status.link && <a href={status.link} target="_blank" rel="noreferrer" className="p-2 text-gray-400 hover:text-semillero-primary"><ExternalLink className="w-4 h-4" /></a>}
+                                                <button onClick={() => setShowIndividualReport(student)} className="p-2 text-gray-400 hover:text-semillero-primary"><BarChart2 className="w-4 h-4" /></button>
+                                              </div>
+                                            </td>
+                                          </tr>
+                                        );
+                                      })}
                                     </tbody>
                                   </table>
                                 </div>
@@ -1198,7 +1327,7 @@ export default function App() {
                   <thead>
                     <tr className="text-[10px] font-bold text-gray-400 uppercase tracking-widest border-b border-gray-100">
                       <th className="pb-4">Alumno</th>
-                      <th className="pb-4">Grupo</th>
+                      <th className="pb-4">Célula</th>
                       <th className="pb-4">ID</th>
                       <th className="pb-4">Email</th>
                       <th className="pb-4 text-right">Reporte</th>
@@ -1223,12 +1352,12 @@ export default function App() {
 
         {showTeacherModal && (
           <div className="modal-overlay">
-            <motion.div initial={{ scale: 0.9, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} className="modal-content max-w-2xl">
-              <div className="p-8 border-b border-gray-100 flex items-center justify-between">
+            <motion.div initial={{ scale: 0.9, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} className="modal-content max-w-2xl max-h-[90vh]">
+              <div className="p-8 border-b border-gray-100 flex items-center justify-between shrink-0">
                 <h2 className="text-2xl font-bold text-semillero-dark">Profesores del Curso</h2>
                 <button onClick={() => setShowTeacherModal(false)} className="p-2 hover:bg-gray-100 rounded-full"><X className="w-6 h-6" /></button>
               </div>
-              <div className="p-8">
+              <div className="p-8 overflow-y-auto max-h-[calc(90vh-100px)]">
                 <div className="space-y-4">
                   {teachers.map(t => (
                     <div key={t.profile.id} className="flex items-center justify-between p-4 bg-gray-50 rounded-2xl">
@@ -1252,54 +1381,82 @@ export default function App() {
 
         {showGroupModal && (
           <div className="modal-overlay">
-            <motion.div initial={{ scale: 0.9, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} className="modal-content max-w-4xl">
-              <div className="p-8 border-b border-gray-100 flex items-center justify-between">
+            <motion.div initial={{ scale: 0.9, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} className="modal-content max-w-4xl max-h-[90vh] flex flex-col">
+              <div className="p-8 border-b border-gray-100 flex items-center justify-between shrink-0">
                 <div>
-                  <h2 className="text-2xl font-bold text-semillero-dark">Gestionar Grupos</h2>
-                  <p className="text-sm text-gray-500">Asigna profesores y alumnos a grupos específicos y personaliza sus nombres.</p>
+                  <h2 className="text-2xl font-bold text-semillero-dark">Gestionar Células</h2>
+                  <p className="text-sm text-gray-500">Asigna profesores y alumnos a células específicas y personaliza sus nombres.</p>
                 </div>
                 <button onClick={() => setShowGroupModal(false)} className="p-2 hover:bg-gray-100 rounded-full"><X className="w-6 h-6" /></button>
               </div>
-              <div className="p-8 space-y-8 max-h-[70vh] overflow-y-auto">
+              <div className="p-8 space-y-6 overflow-y-auto flex-1">
                 <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 p-4 bg-semillero-primary/5 rounded-2xl border border-semillero-primary/10">
                   <div className="flex items-center gap-3">
-                    <span className="text-sm font-bold text-semillero-dark">Cantidad de Grupos:</span>
+                    <span className="text-sm font-bold text-semillero-dark">Cantidad de Células:</span>
                     <input 
                       type="number" 
                       min="1" 
                       max="10" 
-                      value={groupConfig.count} 
-                      onChange={(e) => saveGroups({ ...groupConfig, count: parseInt(e.target.value) || 1 })}
+                      value={draftGroupConfig.count} 
+                      onChange={(e) => setDraftGroupConfig({ ...draftGroupConfig, count: parseInt(e.target.value) || 1 })}
                       className="w-20 px-3 py-1 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-semillero-primary/20 bg-white"
                     />
                   </div>
                 </div>
 
-                {/* Personalización de Nombres de Grupos */}
+                {/* Personalización de Nombres de Células */}
                 <div className="p-5 bg-gray-50 rounded-2xl border border-gray-100 space-y-3">
                   <h4 className="text-xs font-bold text-semillero-dark uppercase tracking-wider flex items-center gap-2">
-                    <Settings className="w-4 h-4 text-semillero-primary" /> Nombres Personalizados de Grupos
+                    <Settings className="w-4 h-4 text-semillero-primary" /> Nombres Personalizados de Células
                   </h4>
                   <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
-                    {Array.from({ length: groupConfig.count }).map((_, i) => {
+                    {Array.from({ length: draftGroupConfig.count }).map((_, i) => {
                       const gId = i + 1;
-                      const customVal = groupConfig.names?.[gId] || '';
+                      const customVal = draftGroupConfig.names?.[gId] || '';
                       return (
                         <div key={gId} className="flex items-center gap-2">
-                          <span className="text-xs font-bold text-gray-500 min-w-[55px]">Grupo {gId}:</span>
+                          <span className="text-xs font-bold text-gray-500 min-w-[65px]">Célula {gId}:</span>
                           <input
                             type="text"
-                            placeholder={`Ej: Comisión ${gId}`}
+                            placeholder={`Ej: Célula ${gId}`}
                             value={customVal}
                             onChange={(e) => {
-                              const newNames = { ...(groupConfig.names || {}), [gId]: e.target.value };
-                              saveGroups({ ...groupConfig, names: newNames });
+                              const newNames = { ...(draftGroupConfig.names || {}), [gId]: e.target.value };
+                              setDraftGroupConfig({ ...draftGroupConfig, names: newNames });
                             }}
                             className="flex-1 px-3 py-1.5 bg-white border border-gray-200 rounded-xl text-xs focus:outline-none focus:ring-2 focus:ring-semillero-primary/20"
                           />
                         </div>
                       );
                     })}
+                  </div>
+                </div>
+
+                {/* Importación y Exportación por CSV */}
+                <div className="flex flex-col sm:flex-row items-center justify-between gap-3 p-4 bg-emerald-50/60 rounded-2xl border border-emerald-100">
+                  <div>
+                    <h4 className="text-xs font-bold text-emerald-900 uppercase tracking-wider flex items-center gap-1.5">
+                      <FileText className="w-4 h-4 text-emerald-600" /> Asignación de Alumnos por CSV
+                    </h4>
+                    <p className="text-xs text-emerald-700 mt-0.5">Exporta o importa la asignación de alumnos a células (CSV simple: Email, Célula)</p>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <button 
+                      type="button" 
+                      onClick={exportStudentGroupsCSV} 
+                      className="px-3 py-1.5 bg-white border border-emerald-200 text-emerald-800 rounded-xl text-xs font-bold hover:bg-emerald-100/50 flex items-center gap-1.5 transition-colors shadow-sm cursor-pointer"
+                    >
+                      <Download className="w-3.5 h-3.5 text-emerald-600" /> Exportar CSV
+                    </button>
+                    <label className="px-3 py-1.5 bg-emerald-600 text-white rounded-xl text-xs font-bold hover:bg-emerald-700 flex items-center gap-1.5 cursor-pointer transition-colors shadow-sm">
+                      <Upload className="w-3.5 h-3.5" /> Importar CSV
+                      <input 
+                        type="file" 
+                        accept=".csv,text/csv" 
+                        onChange={handleImportStudentGroupsCSV} 
+                        className="hidden" 
+                      />
+                    </label>
                   </div>
                 </div>
 
@@ -1311,20 +1468,20 @@ export default function App() {
                         <div key={t.profile.id} className="flex items-center justify-between p-3 bg-white border border-gray-100 rounded-xl">
                           <span className="text-sm font-medium truncate max-w-[180px]">{t.profile.name.fullName}</span>
                           <select 
-                            value={groupConfig.teachers[t.profile.emailAddress] || ''} 
+                            value={draftGroupConfig.teachers[t.profile.emailAddress] || ''} 
                             onChange={(e) => {
-                              const newTeachers = { ...groupConfig.teachers, [t.profile.emailAddress]: e.target.value ? parseInt(e.target.value) : null };
-                              saveGroups({ ...groupConfig, teachers: newTeachers });
+                              const newTeachers = { ...draftGroupConfig.teachers, [t.profile.emailAddress]: e.target.value ? parseInt(e.target.value) : null };
+                              setDraftGroupConfig({ ...draftGroupConfig, teachers: newTeachers });
                             }}
                             className="text-xs border border-gray-200 rounded px-2 py-1 max-w-[180px]"
                           >
-                            <option value="">Sin Grupo</option>
-                            {Array.from({ length: groupConfig.count }).map((_, i) => {
+                            <option value="">Sin Célula</option>
+                            {Array.from({ length: draftGroupConfig.count }).map((_, i) => {
                               const gId = i + 1;
-                              const cName = groupConfig.names?.[gId];
+                              const cName = draftGroupConfig.names?.[gId];
                               return (
                                 <option key={gId} value={gId}>
-                                  {cName ? `${cName} (G${gId})` : `Grupo ${gId}`}
+                                  {cName ? `${cName} (Célula ${gId})` : `Célula ${gId}`}
                                 </option>
                               );
                             })}
@@ -1340,20 +1497,20 @@ export default function App() {
                         <div key={s.profile.id} className="flex items-center justify-between p-3 bg-white border border-gray-100 rounded-xl">
                           <span className="text-sm font-medium truncate max-w-[180px]">{s.profile.name.fullName}</span>
                           <select 
-                            value={groupConfig.students[s.profile.emailAddress] || ''} 
+                            value={draftGroupConfig.students[s.profile.emailAddress] || ''} 
                             onChange={(e) => {
-                              const newStudents = { ...groupConfig.students, [s.profile.emailAddress]: e.target.value ? parseInt(e.target.value) : null };
-                              saveGroups({ ...groupConfig, students: newStudents });
+                              const newStudents = { ...draftGroupConfig.students, [s.profile.emailAddress]: e.target.value ? parseInt(e.target.value) : null };
+                              setDraftGroupConfig({ ...draftGroupConfig, students: newStudents });
                             }}
                             className="text-xs border border-gray-200 rounded px-2 py-1 max-w-[180px]"
                           >
-                            <option value="">Sin Grupo</option>
-                            {Array.from({ length: groupConfig.count }).map((_, i) => {
+                            <option value="">Sin Célula</option>
+                            {Array.from({ length: draftGroupConfig.count }).map((_, i) => {
                               const gId = i + 1;
-                              const cName = groupConfig.names?.[gId];
+                              const cName = draftGroupConfig.names?.[gId];
                               return (
                                 <option key={gId} value={gId}>
-                                  {cName ? `${cName} (G${gId})` : `Grupo ${gId}`}
+                                  {cName ? `${cName} (Célula ${gId})` : `Célula ${gId}`}
                                 </option>
                               );
                             })}
@@ -1362,6 +1519,43 @@ export default function App() {
                       ))}
                     </div>
                   </div>
+                </div>
+              </div>
+
+              {/* Pie con Botón de Guardar Configuración */}
+              <div className="p-6 border-t border-gray-100 flex flex-col sm:flex-row items-center justify-between gap-4 bg-gray-50/50 rounded-b-[40px] shrink-0">
+                <div>
+                  {csvMessage ? (
+                    <p className="text-xs font-semibold text-emerald-700 bg-emerald-50 border border-emerald-100 px-3 py-1.5 rounded-xl">
+                      {csvMessage}
+                    </p>
+                  ) : (
+                    <p className="text-xs text-gray-500">
+                      Haz clic en "Guardar Configuración" para confirmar los cambios.
+                    </p>
+                  )}
+                </div>
+                <div className="flex items-center gap-3 w-full sm:w-auto justify-end">
+                  <button 
+                    type="button" 
+                    onClick={() => setShowGroupModal(false)} 
+                    className="btn-secondary text-xs py-2.5 px-5"
+                  >
+                    Cancelar
+                  </button>
+                  <button 
+                    type="button" 
+                    onClick={handleSaveDraftGroups} 
+                    disabled={isSavingGroups} 
+                    className="btn-primary text-xs py-2.5 px-6 flex items-center gap-2 shadow-md hover:shadow-lg transition-all"
+                  >
+                    {isSavingGroups ? (
+                      <div className="w-4 h-4 border-2 border-white/20 border-t-white rounded-full animate-spin" />
+                    ) : (
+                      <CheckCircle2 className="w-4 h-4" />
+                    )}
+                    <span>Guardar Configuración</span>
+                  </button>
                 </div>
               </div>
             </motion.div>
