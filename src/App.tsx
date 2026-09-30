@@ -835,7 +835,10 @@ export default function App() {
         '% Entrega',
         'Tareas Entregadas',
         'Tareas Totales',
-        ...courseWork.map(tw => tw.title)
+        ...courseWork.flatMap(tw => [
+          `${tw.title} (Estado)`,
+          `${tw.title} (Calificación)`
+        ])
       ];
 
       const rows = students.map(s => {
@@ -844,11 +847,14 @@ export default function App() {
         const percentage = courseWork.length > 0 ? Math.round((deliveredCount / courseWork.length) * 100) : 0;
         const gName = s.groupId ? getGroupName(s.groupId) : '-';
 
-        const taskStatuses = courseWork.map(tw => {
+        const taskColumns = courseWork.flatMap(tw => {
           const sub = submissions.find(sub => sub.userId === s.profile.id && sub.courseWorkId === tw.id);
-          if (sub?.state === 'RETURNED') return 'Calificado';
-          if (sub?.state === 'TURNED_IN') return 'Entregado';
-          return 'Pendiente';
+          let statusText = 'Pendiente';
+          if (sub?.state === 'RETURNED') statusText = 'Calificado';
+          else if (sub?.state === 'TURNED_IN') statusText = 'Entregado';
+
+          const gradeText = (sub && typeof sub.assignedGrade === 'number') ? String(sub.assignedGrade) : '';
+          return [cleanCell(statusText), cleanCell(gradeText)];
         });
 
         return [
@@ -858,7 +864,7 @@ export default function App() {
           cleanCell(`${percentage}%`),
           cleanCell(`${deliveredCount}`),
           cleanCell(`${courseWork.length}`),
-          ...taskStatuses.map(st => cleanCell(st))
+          ...taskColumns
         ];
       });
 
@@ -917,43 +923,62 @@ export default function App() {
         bodyStyles: { fontSize: 11, halign: 'center', fontStyle: 'bold' }
       });
 
-      // Matriz de Cumplimiento
-      const tableHeaders = ['Alumno', ...courseWork.map(tw => tw.title), '% Entrega'];
+      // Matriz de Cumplimiento y Calificaciones
+      const tableHeaders = [
+        'Alumno',
+        ...courseWork.flatMap(tw => [tw.title, 'Calif.']),
+        '% Entrega'
+      ];
       const tableData = students.map(s => {
         const studentSubs = submissions.filter(sub => sub.userId === s.profile.id);
         const deliveredCount = studentSubs.filter(sub => sub.state === 'TURNED_IN' || sub.state === 'RETURNED').length;
         const percentage = courseWork.length > 0 ? Math.round((deliveredCount / courseWork.length) * 100) : 0;
 
-        const taskStatuses = courseWork.map(tw => {
+        const taskColumns = courseWork.flatMap(tw => {
           const sub = submissions.find(sub => sub.userId === s.profile.id && sub.courseWorkId === tw.id);
-          if (sub?.state === 'RETURNED') return 'Calificado';
-          if (sub?.state === 'TURNED_IN') return 'Entregado';
-          return 'Pendiente';
+          let statusText = 'Pendiente';
+          if (sub?.state === 'RETURNED') statusText = 'Calificado';
+          else if (sub?.state === 'TURNED_IN') statusText = 'Entregado';
+
+          const gradeText = (sub && typeof sub.assignedGrade === 'number') ? String(sub.assignedGrade) : '';
+          return [statusText, gradeText];
         });
 
-        return [s.profile.name.fullName, ...taskStatuses, `${percentage}%`];
+        return [s.profile.name.fullName, ...taskColumns, `${percentage}%`];
       });
 
       const lastY = (doc as any).lastAutoTable?.finalY || 55;
 
       doc.setFontSize(12);
       doc.setTextColor(30, 41, 59);
-      doc.text('Matriz de Cumplimiento de Tareas', 14, lastY + 10);
+      doc.text('Matriz de Cumplimiento y Calificaciones', 14, lastY + 10);
 
       autoTable(doc, {
         startY: lastY + 14,
         head: [tableHeaders],
         body: tableData,
         theme: 'striped',
-        headStyles: { fillColor: [45, 106, 79], textColor: [255, 255, 255], fontSize: 8, fontStyle: 'bold' },
+        headStyles: { fillColor: [45, 106, 79], textColor: [255, 255, 255], fontSize: 8, fontStyle: 'bold', halign: 'center' },
         bodyStyles: { fontSize: 8 },
         didParseCell: (data) => {
-          if (data.section === 'body' && data.column.index > 0 && data.column.index <= courseWork.length) {
+          if (data.section === 'body') {
             if (data.cell.raw === 'Entregado' || data.cell.raw === 'Calificado') {
               data.cell.styles.textColor = [22, 101, 52];
               data.cell.styles.fontStyle = 'bold';
+              data.cell.styles.halign = 'center';
             } else if (data.cell.raw === 'Pendiente') {
               data.cell.styles.textColor = [194, 65, 12];
+              data.cell.styles.halign = 'center';
+            } else if (data.column.index > 0 && data.column.index <= courseWork.length * 2) {
+              if (data.column.index % 2 === 0) {
+                // Calificación
+                data.cell.styles.halign = 'center';
+                data.cell.styles.fontStyle = 'bold';
+                data.cell.styles.textColor = [30, 41, 59];
+              }
+            } else if (data.column.index === tableHeaders.length - 1) {
+              data.cell.styles.halign = 'center';
+              data.cell.styles.fontStyle = 'bold';
             }
           }
         }
@@ -1615,14 +1640,17 @@ export default function App() {
                 </div>
 
                 <div className="space-y-4">
-                  <h3 className="text-xl font-bold text-semillero-dark">Matriz de Cumplimiento</h3>
+                  <h3 className="text-xl font-bold text-semillero-dark">Matriz de Cumplimiento y Calificaciones</h3>
                   <div className="overflow-x-auto">
                     <table className="w-full text-left border-collapse">
                       <thead>
                         <tr className="text-[10px] font-bold text-gray-400 uppercase tracking-widest border-b border-gray-100">
                           <th className="pb-4 pr-4 sticky left-0 bg-white z-10">Alumno</th>
                           {courseWork.map(tw => (
-                            <th key={tw.id} className="pb-4 px-2 text-center min-w-[100px]">{tw.title}</th>
+                            <React.Fragment key={tw.id}>
+                              <th className="pb-4 px-2 text-center min-w-[95px]">{tw.title}</th>
+                              <th className="pb-4 px-2 text-center min-w-[65px] text-semillero-primary">Calificación</th>
+                            </React.Fragment>
                           ))}
                           <th className="pb-4 pl-4 text-right">% Entrega</th>
                         </tr>
@@ -1635,17 +1663,42 @@ export default function App() {
                           
                           return (
                             <tr key={s.profile.id} className="hover:bg-gray-50 transition-colors">
-                              <td className="py-3 pr-4 sticky left-0 bg-white z-10 font-bold text-xs text-semillero-dark">{s.profile.name.fullName}</td>
+                              <td className="py-3 pr-4 sticky left-0 bg-white z-10 font-bold text-xs text-semillero-dark whitespace-nowrap">{s.profile.name.fullName}</td>
                               {courseWork.map(tw => {
                                 const sub = submissions.find(sub => sub.userId === s.profile.id && sub.courseWorkId === tw.id);
-                                const isDelivered = sub?.state === 'TURNED_IN' || sub?.state === 'RETURNED';
+                                const hasGrade = sub && typeof sub.assignedGrade === 'number';
+                                let statusBadge = (
+                                  <span className="inline-block px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-50 text-amber-700 border border-amber-200">
+                                    Pendiente
+                                  </span>
+                                );
+
+                                if (sub?.state === 'RETURNED') {
+                                  statusBadge = (
+                                    <span className="inline-block px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200">
+                                      Calificado
+                                    </span>
+                                  );
+                                } else if (sub?.state === 'TURNED_IN') {
+                                  statusBadge = (
+                                    <span className="inline-block px-2 py-0.5 rounded-full text-[10px] font-bold bg-blue-50 text-blue-700 border border-blue-200">
+                                      Entregado
+                                    </span>
+                                  );
+                                }
+
                                 return (
-                                  <td key={tw.id} className="py-3 px-2 text-center">
-                                    <div className={`w-3 h-3 rounded-full mx-auto ${isDelivered ? 'bg-green-500' : 'bg-red-200'}`} />
-                                  </td>
+                                  <React.Fragment key={tw.id}>
+                                    <td className="py-3 px-2 text-center whitespace-nowrap">
+                                      {statusBadge}
+                                    </td>
+                                    <td className="py-3 px-2 text-center font-bold text-xs text-semillero-dark whitespace-nowrap">
+                                      {hasGrade ? sub.assignedGrade : ''}
+                                    </td>
+                                  </React.Fragment>
                                 );
                               })}
-                              <td className="py-3 pl-4 text-right">
+                              <td className="py-3 pl-4 text-right whitespace-nowrap">
                                 <span className={`font-bold text-xs ${percentage >= 70 ? 'text-green-600' : percentage >= 40 ? 'text-orange-500' : 'text-red-600'}`}>
                                   {percentage}%
                                 </span>
